@@ -1,98 +1,79 @@
 # ✦ OVENQUILL GUARD
 
-Система безопасной модерации и аудита для приватного Minecraft-проекта OVENQUILL. Поддерживает Paper/Purpur 26.2 и сеть Velocity.
+Paper/Purpur 26.2 + Velocity moderation and security plugin for OVENQUILL.
 
-> **Статус:** первый рабочий инкремент 1.0.0-SNAPSHOT. Xray, CoreProtect и временные LuckPerms-профили ещё находятся в разработке.
+> **Current build:** 1.1.0-SNAPSHOT. Requires Java 25, LuckPerms and CoreProtect for Xray Replay.
 
-## Возможности
+## Что изменено в 1.1
 
-- MOD MODE через `/mod on|off|status`.
-- Полное разделение игрового и служебного инвентарей.
-- SQLite-журнал фаз `ENTERING / ACTIVE / EXITING`.
-- Автоматическое восстановление после сбоя или reconnect.
-- PDC-маркеры и защита служебных предметов от переноса.
-- Аудит команд, блоков, контейнеров и телепортаций.
-- Маскирование паролей и токенов.
-- Оценка риска опасных команд.
-- Идемпотентная локальная очередь аудита.
-- Асинхронная пакетная отправка в OVENQUILL CONTROL.
-- Velocity Bridge с запретом перехода при активном MOD MODE.
-
-## Требования
-
-- Minecraft / Paper / Purpur 26.2
-- Java 25
-- Velocity 4.x для прокси-сети
-- LuckPerms для управления доступом
+- В MOD MODE служебный инвентарь полностью пустой.
+- /mod больше не выдаёт предметы и сам не включает spectator.
+- /mod on временно подключает все permissions из настраиваемой группы LuckPerms.
+- /mod off снимает временные разрешения и восстанавливает исходное состояние.
+- Добавлен Xray Replay через публичный CoreProtect API.
 
 ## Установка
 
-1. Скачайте оба JAR из корня репозитория.
-2. Установите `guard-paper-1.0.0-SNAPSHOT.jar` на каждый Paper/Purpur backend.
-3. Установите `guard-velocity-1.0.0-SNAPSHOT.jar` на Velocity.
-4. Перезапустите серверы и укажите уникальный `guard.server-id`.
-5. Настройте Velocity modern forwarding и сетевую изоляцию backend.
+1. Установите `guard-paper-1.1.0-SNAPSHOT.jar` на каждый Paper/Purpur backend.
+2. Установите `guard-velocity-1.0.0-SNAPSHOT.jar` на Velocity.
+3. Перезапустите серверы.
+4. В `config.yml` задайте уникальный `guard.server-id` и имя LP-группы.
 
-## Доступ через LuckPerms
+## Настройка LuckPerms
 
-Команда `/mod` не требует OP и по умолчанию никому не доступна.
+Право на включение режима:
 
 ```text
 /lp user <ник> permission set ovenquill.guard.mod.use true
 ```
 
-Отозвать доступ:
+Создайте отдельную группу функций модератора:
 
 ```text
-/lp user <ник> permission unset ovenquill.guard.mod.use
+/lp creategroup ovenquill-moderator
+/lp group ovenquill-moderator permission set essentials.tp true
+/lp group ovenquill-moderator permission set essentials.vanish true
+/lp group ovenquill-moderator permission set ovenquill.guard.xray.inspect true
 ```
 
-Разрешение на `/guard status` выдаётся отдельно:
+Конфигурация:
+
+```yaml
+permissions:
+  provider: luckperms
+  moderator-group: ovenquill-moderator
+```
+
+При `/mod on` плагин читает итоговые permissions этой группы, включая наследуемые, и подключает их игроку временно. Игрок не становится постоянным участником группы. При `/mod off`, выходе или восстановлении разрешения снимаются.
+
+## Xray Replay
+
+Команда работает только в активном MOD MODE и при наличии `ovenquill.guard.xray.inspect` в группе:
 
 ```text
-/lp user <ник> permission set ovenquill.guard.admin.status true
+/xray алмаз 2h
+/xray незерит 30m
+/xray diamond_ore 1d
+/xray stop
 ```
 
-Право `ovenquill.guard.mod.use` разрешает только вход в MOD MODE. Оно не выдаёт OP, wildcard `*` или сторонние административные команды.
+- `алмаз` ищет сразу `DIAMOND_ORE` и `DEEPSLATE_DIAMOND_ORE`.
+- `незерит` ищет `ANCIENT_DEBRIS`.
+- Можно указать любой Minecraft Material.
+- Время: секунды `s`, минуты `m`, часы `h`, дни `d`; максимум 30 дней.
 
-## Безопасность состояния
+Поиск выполняется асинхронно в базе CoreProtect. После поиска модератор переводится в spectator и телепортируется к первой записи. Он может свободно летать. ПКМ переносит к следующей записи. В чат выводятся материал, игрок, дата, время, мир и координаты. В конце списка либо после `/xray stop` возвращаются прежние режим игры и позиция.
 
-Перед переключением исходное состояние фиксируется в SQLite с `synchronous=FULL`. Сохраняются инвентарь, броня, вторая рука, выбранный слот, опыт, здоровье, голод, игровой режим, координаты, полёт и эффекты. Исходный снимок не перезаписывается незавершённой операцией.
+## Безопасность
 
-При выходе запись переводится в `EXITING`, служебные предметы удаляются, исходное состояние восстанавливается и только после этого запись удаляется. При аварии восстановление выполняется на следующем входе.
+Перед MOD MODE исходное состояние фиксируется в SQLite с `synchronous=FULL`: инвентарь, броня, offhand, опыт, здоровье, голод, режим игры, координаты, полёт и эффекты. Незавершённое состояние восстанавливается после reconnect или сбоя. HTTP-аудит выполняется вне игрового потока, а команды с паролями и токенами маскируются.
 
-## Audit API
+## Файлы
 
-События сначала сохраняются локально, затем отправляются без блокировки игрового потока:
+- `guard-paper-1.1.0-SNAPSHOT.jar` — актуальный Paper/Purpur plugin.
+- `guard-velocity-1.0.0-SNAPSHOT.jar` — совместимый Velocity Bridge.
+- `ovenquill-guard-source-1.1.0-SNAPSHOT-20261121.zip` — полный Gradle-проект.
 
-```text
-POST /api/v1/guard/events/batch
-Authorization: Bearer <machine-token>
-```
+## Статус
 
-API-ключ хранится только в переменной окружения `OVENQUILL_GUARD_TOKEN`. Команды авторизации маскируются. Ввод команды отмечается как `SUBMITTED`, а не как гарантированно выполненная операция.
-
-## Модули
-
-- `guard-common` — модель аудита, маскирование секретов, оценка риска.
-- `guard-paper` — MOD MODE, восстановление, инструменты, SQLite и Guard API.
-- `guard-velocity` — блокировка небезопасных переходов между backend.
-
-## Исходный код
-
-Архив `ovenquill-guard-source-1.0.0-SNAPSHOT-20261121.zip` содержит полный Gradle-проект. Сборка:
-
-```powershell
-gradle wrapper
-.\gradlew.bat clean test build
-```
-
-## План до полной v1.0
-
-LuckPerms-профили `JUNIOR_MOD / MODERATOR / SENIOR_MOD / OWNER`, CoreProtect API, расширенный аудит item transfer, Xray Monitor, Xray Replay, heartbeat/config API и Guard Dashboard.
-
-Подозрение Xray никогда не должно считаться доказанным нарушением или приводить к автоматическому бану без проверки.
-
-## Лицензия
-
-Проект предназначен для инфраструктуры OVENQUILL. Отдельная open-source лицензия пока не назначена.
+Сборка прошла `clean test build`. Полная v1.0 всё ещё требует расширенного item-transfer аудита, Xray-аналитики подозрительности и Guard Dashboard. Xray Replay показывает факты CoreProtect и не выносит автоматический вердикт о нарушении.
